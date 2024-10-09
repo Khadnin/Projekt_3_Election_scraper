@@ -1,0 +1,203 @@
+"""
+projekt_1.py: první projekt do Engeto Online Python Akademie
+
+author: Ondřej Laskafeld
+email: ondrej.laskafeld@gmail.com
+discord: khadnin
+"""
+
+# Importování potřebných modulů
+import sys
+import re
+import requests
+from bs4 import BeautifulSoup as bs
+import time
+import csv
+
+start = time.time()
+
+#-------------------------------------------------------------------------------------------------------------------
+# Funkce
+
+# Funkce na testování zda jsou zadány dva argumenty (jakékoliv)
+def argv_check():
+    if len(sys.argv) <= 2:
+        print("Adress in must be specified to scrape and name of target file (in total 2 arguments) are needed to run this script.")
+        exit()
+    else:
+        pass   
+
+# Funkce na kontrolu zda je vstup(1) url adresa
+def input_adress_check(input_argv1):
+    url_response = requests.get(input_argv1)
+    if str(url_response) == "<Response [200]>":
+        pass
+    else:
+        print("URL adress NOT found.")
+
+# Funkce na kontrolu zda je vstup(2) validní "*.csv"
+def target_file_name_check(input_argv2):
+    pattern = re.compile(f"{"[A-Za-z0-9_]+"}{".csv"}")
+    if pattern.match(input_argv2):
+        pass
+    else:
+        print("Second argument needs to be name of the target file in following format - 'name.csv'. Name can be alfanumerical signs and instead space use '_'.")
+        exit()
+
+# Funkce na zjištění začátku vložené adressy, které bude následně sloužit jako základ pro scrapování
+def url_start(adress):
+    for i in range(len(adress) - 2):
+        if str(f"{adress[i]}{adress[i+1]}{adress[i+2]}") == "ps3":
+            return(adress[0:i])
+        
+# Funkce na zjištění kódu obce z url
+def settlment_code(adress):
+    for i in range(len(adress) - 2):
+        if str(f"{adress[i]}{adress[i + 1]}{adress[i + 2]}") == "ec=":
+            return(adress[(i + 3):(i + 9)])
+
+# Funkce pro vytvoření seznamu všech kandidujících politických subjektů 
+def political_list(inp_adress, url_setl_list):
+    political_subject_list = []
+    # Získání seznamu politických subjektů volených v první obci v seznamu a přidání do seznamu subjektů (ve všech obcích musí být stejné = nemá smysl kontrolovat všechny obce)
+    core_url = url_start(inp_adress)
+    url_get = (f"{core_url}{url_setl_list[0]}")
+    url_response = requests.get(url_get)
+    separated_html = bs(url_response.text, "html.parser")
+    for political_subject in separated_html.find_all("td", class_ = "overflow_name"):
+        if political_subject.get_text() not in political_subject_list:
+            political_subject_list.append(political_subject.get_text())
+    return(political_subject_list)
+
+# Funkce spočítání počtu tabulek na stránce (počet tabulek s odkazy na obce)
+def counter_tables(separated_html):
+    counter = 0
+    for line in separated_html.find_all("table", class_ = "table"):
+        counter += 1
+    return(counter)
+
+# Funkce na získání seznamu odkazů na všechny obce (pouze souhrné výsledky za obec, ne odkaz na stánku s výsledky podle okrsků) - tzn projetí všech tabulek podle počtu "counter" a hledání "headru" se zadaným označením
+def url_settlement_list(counter, separated_html):
+    url_list = []
+    # Projití všech tabulek
+    for i in range(1, (counter+1)):
+        headers_clasification = (f"t{i}sa1 t{i}sb1")
+    # Projití všech buněk (<td>) s hlavičkou "txsa1 txsb1" a vytažení url z nich
+        for tr_settlement in separated_html.find_all("td", headers = headers_clasification):
+            url_list.append(tr_settlement.find('a')['href'])
+    return(url_list)
+
+# Funkce hledání jména obce na stránce s výsledky pro danou obec
+def find_settlement_name(separated_html):
+    all_h3 = separated_html.find_all('h3')
+    for h3_cut_out in all_h3:
+        if 'Obec:' in h3_cut_out.text:
+            obec_text = h3_cut_out.text
+            # Na konci jméne je "\n", proto .strip()
+            obec = (obec_text.split(":")[1]).strip()
+            return(obec)
+
+# Funkce odstraňující ze vstupu (text) "\xa0" aby byla čísla (výstup) konzistentní
+def delete_xa0(ugly_input):
+    if len(ugly_input) >= 4:
+        nice_output = str(ugly_input.replace("\xa0", ""))
+        return(nice_output)
+    else:
+        return(ugly_input)
+
+# Funkce pro vytvoření seznamu všech kandidujících politických subjektů 
+def votes(inp_adress, politics):
+    results = {}
+    url_response = requests.get(inp_adress)
+    separated_html = bs(url_response.text, "html.parser")
+    # Kód obce
+    results["code"] = settlment_code(inp_adress)
+    # Jméno obce
+    results["location"] = find_settlement_name(separated_html)
+    # "sa2" = Voliči v seznamu
+    voters = separated_html.find("td", headers = "sa2").text
+    voters_clear = delete_xa0(voters)
+    results["registered"] = voters_clear
+    # "sa5" = Odevzdané obálky
+    envelops = separated_html.find("td", headers = "sa5").text
+    envelops_clear = delete_xa0(envelops)
+    results["envelopes"] = envelops_clear
+    # "sa6" = Platné hlasy
+    total_votes = separated_html.find("td", headers = "sa6").text
+    total_votes_clear = delete_xa0(total_votes)
+    results["valid"] = total_votes_clear
+    # Nalezení všech buňek podle hmtl tagu <tr> + počítadlo na procházení seznamu politiských subjektů
+    tr_cells = separated_html.find_all('tr')
+    counter = 0
+    for record in tr_cells:
+        # Ne všechny buňky mají tag <td> - "try" zda je tam hledaný formát (tzn jméno politického subjektu a kdyžtak dopsání počet hlasů do slovníku), "except" jdi dál
+        try:
+            subject_name = record.find('td', class_='overflow_name').text
+            if subject_name == politics[counter]:
+                vot = record.find_all('td', class_='cislo')[1].text
+                vot_clear = delete_xa0(vot)
+                results[subject_name] = vot_clear
+                counter += 1
+        except:
+            pass
+    return(results)
+
+# Funkce na projití všech odkazů (obcí) a vytvoření přehledu pomocí fce "votes"
+def votes_of_settlement(settlements, input_adress, politics):
+    list_of_votes = []
+    count = 1
+    for i in settlements:
+        core_url = url_start(input_adress)
+        url_get = (f"{core_url}{i}")
+        print(f"{count} z {len(settlements)} obcí scrapováno.")
+        list_of_votes.append(votes(url_get, politics))
+        count += 1
+    return(list_of_votes)
+    
+#-------------------------------------------------------------------------------------------------------------------
+
+# Kontrola zda je zadaný potřebný počet argumentů
+argv_check()
+
+# Uložení vložených argumentů do proměnných 
+input_adress = sys.argv[1]
+target_file = sys.argv[2]
+
+# Kontrola zda jsou zadané argumenty v požadovaném tvaru
+target_file_name_check(target_file)
+input_adress_check(input_adress)
+
+print("\n"
+    "Argumenty jsou správně zadané a mají správný formát.\n"
+    "Zahajuji stahování a vytváření souboru\n"
+    )
+
+# Získání HTML ze zadané adresy
+url_response = requests.get(input_adress)
+separated_html = bs(url_response.text, "html.parser")
+
+# Spočítání počtu tabulek na stránce (počet tabulek s odkazy na obce)
+count = counter_tables(separated_html)
+
+# Vytvoření seznamu odkazů všech obcí na stránce
+settlements = (url_settlement_list(count, separated_html))
+
+# Vytvoření seznamu kandidujících politických subjektů 
+politics = political_list(input_adress, settlements)
+
+data = votes_of_settlement(settlements, input_adress, politics)
+
+# Otevření/vytvoření .csv souboru podle zadaného jména (target_file). Vytvoření záhlaví podle klíčů slovníku a zapsání hodnot do jednotlivých řádků ze slovníku.
+with open(target_file, "w", newline='') as csv_file:
+    field_names = data[0].keys()
+    writer = csv.DictWriter(csv_file, fieldnames = field_names)
+    writer.writeheader()
+    writer.writerows(data)
+
+print("\n"
+    "Soubor úspěšně vytvořen.\n")
+
+# Ukázka času stráveného během skriptu
+end = time.time()
+result = round((end - start), 2)
+print("Hotovo. Script běžel:", result, " s")

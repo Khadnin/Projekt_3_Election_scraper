@@ -84,7 +84,11 @@ def url_settlement_list(counter, separated_html):
         headers_clasification = (f"t{i}sa1 t{i}sb1")
     # Projití všech buněk (<td>) s hlavičkou "txsa1 txsb1" a vytažení url z nich
         for tr_settlement in separated_html.find_all("td", headers = headers_clasification):
-            url_list.append(tr_settlement.find('a')['href'])
+            # "Try" protože ne všechny "td" (buňky tabulky) obsahují odkaz na obec - některé buňky jsou prázdné, kvůli počtu obcí vs sloupců tabulky
+            try:
+                url_list.append(tr_settlement.find('a')['href'])
+            except:
+                pass
     return(url_list)
 
 # Funkce hledání jména obce na stránce s výsledky pro danou obec
